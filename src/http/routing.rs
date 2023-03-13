@@ -625,7 +625,7 @@ impl Route {
         let mut s = api!("/channels/{}/threads/archived/public", channel_id);
 
         if let Some(id) = before {
-            write!(s, "&before={}", id).unwrap();
+            write!(s, "?before={}", id).unwrap();
         }
 
         if let Some(limit) = limit {
