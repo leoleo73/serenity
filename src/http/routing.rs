@@ -3,6 +3,7 @@ use std::fmt::{Display, Write};
 
 use super::LightMethod;
 use crate::constants;
+use crate::model::Timestamp;
 
 /// A representation of all routes registered within the library. These are safe
 /// and memory-efficient representations of each path that functions exist for
@@ -618,7 +619,7 @@ impl Route {
     #[must_use]
     pub fn channel_archived_public_threads(
         channel_id: u64,
-        before: Option<u64>,
+        before: Option<Timestamp>,
         limit: Option<u64>,
     ) -> String {
         let mut s = api!("/channels/{}/threads/archived/public", channel_id);
@@ -637,7 +638,7 @@ impl Route {
     #[must_use]
     pub fn channel_archived_private_threads(
         channel_id: u64,
-        before: Option<u64>,
+        before: Option<Timestamp>,
         limit: Option<u64>,
     ) -> String {
         let mut s = api!("/channels/{}/threads/archived/private", channel_id);
@@ -656,7 +657,7 @@ impl Route {
     #[must_use]
     pub fn channel_joined_private_threads(
         channel_id: u64,
-        before: Option<u64>,
+        before: Option<Timestamp>,
         limit: Option<u64>,
     ) -> String {
         let mut s = api!("/channels/{}/users/@me/threads/archived/private", channel_id);
@@ -1537,17 +1538,17 @@ pub enum RouteInfo<'a> {
     },
     GetChannelArchivedPublicThreads {
         channel_id: u64,
-        before: Option<u64>,
+        before: Option<Timestamp>,
         limit: Option<u64>,
     },
     GetChannelArchivedPrivateThreads {
         channel_id: u64,
-        before: Option<u64>,
+        before: Option<Timestamp>,
         limit: Option<u64>,
     },
     GetChannelJoinedPrivateArchivedThreads {
         channel_id: u64,
-        before: Option<u64>,
+        before: Option<Timestamp>,
         limit: Option<u64>,
     },
     GetCurrentApplicationInfo,

@@ -2546,7 +2546,7 @@ impl Http {
     pub async fn get_channel_archived_public_threads(
         &self,
         channel_id: u64,
-        before: Option<u64>,
+        before: Option<Timestamp>,
         limit: Option<u64>,
     ) -> Result<ThreadsData> {
         self.fire(Request {
@@ -2566,7 +2566,7 @@ impl Http {
     pub async fn get_channel_archived_private_threads(
         &self,
         channel_id: u64,
-        before: Option<u64>,
+        before: Option<Timestamp>,
         limit: Option<u64>,
     ) -> Result<ThreadsData> {
         self.fire(Request {
@@ -2586,7 +2586,7 @@ impl Http {
     pub async fn get_channel_joined_archived_private_threads(
         &self,
         channel_id: u64,
-        before: Option<u64>,
+        before: Option<Timestamp>,
         limit: Option<u64>,
     ) -> Result<ThreadsData> {
         self.fire(Request {
