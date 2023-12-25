@@ -9,28 +9,28 @@ use std::sync::atomic::Ordering;
 #[tokio::test]
 async fn works_normally() {
     let test_message = format!("Test {}", random::<u32>());
-    generic(SendMessage::BeforeStarted, false, &test_message, vec![]).await;
+    generic(WhenSendMessage::BeforeStarted, false, &test_message, vec![]).await;
 
     let test_message = format!("Test {}", random::<u32>());
-    generic(SendMessage::BeforeStarted2, false, &test_message, vec![]).await;
+    generic(WhenSendMessage::BeforeStarted2, false, &test_message, vec![]).await;
 
     let test_message = format!("Test {}", random::<u32>());
-    generic(SendMessage::StartedStillRunning, false, &test_message, vec![test_message]).await;
+    generic(WhenSendMessage::StartedStillRunning, false, &test_message.clone(), vec![test_message]).await;
 
     let test_message = format!("Test {}", random::<u32>());
-    generic(SendMessage::StartedThenStopped, false, &test_message, vec![]).await;
+    generic(WhenSendMessage::StartedThenStopped, false, &test_message, vec![]).await;
 }
 
 #[tokio::test]
 async fn resume_works() {
     let test_message = format!("Test {}", random::<u32>());
-    generic(SendMessage::StartedThenStopped, true, &test_message, vec![test_message]);
+    generic(WhenSendMessage::StartedThenStopped, true, &test_message.clone(), vec![test_message]).await;
 
     let test_message = format!("Test {}", random::<u32>());
-    generic(SendMessage::StartedThenStoppedThenRestartedAfter, true, &test_message, vec![test_message]);
+    generic(WhenSendMessage::StartedThenStoppedThenRestartedAfter, true, &test_message.clone(), vec![test_message]).await;
 }
 
-enum SendMessage {
+enum WhenSendMessage {
     BeforeStarted,
     BeforeStarted2,
     StartedStillRunning,
@@ -38,7 +38,7 @@ enum SendMessage {
     StartedThenStoppedThenRestartedAfter,
 }
 
-async fn generic(sendMessage: SendMessage, resume: bool, test_message: &str, expected: Vec<String>) {
+async fn generic(when_to_send_message: WhenSendMessage, resume: bool, test_message: &str, expected: Vec<String>) {
 
     let token = env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN not set in the environment");
     let channel = Into::<ChannelId>::into(
@@ -67,15 +67,14 @@ async fn generic(sendMessage: SendMessage, resume: bool, test_message: &str, exp
 
     println!("Connect done");
 
-    if matches!(sendMessage, SendMessage::BeforeStarted) {
+    if matches!(when_to_send_message, WhenSendMessage::BeforeStarted) {
         send_message(&http, channel, &test_message).await;
     }
 
     let messages = Arc::new(Mutex::new(Vec::new()));
-    let handler = MyHandler { messages: messages.clone() };
 
     let mut discord_client_builder = ClientBuilder::new_with_http(new_http(), intents)
-            .event_handler(handler);
+            .event_handler(MyHandler { messages: messages.clone() });
 
     let session_id_recv = discord_client_builder.set_session_id(None);
     let seq_num = discord_client_builder.get_seq_num();
@@ -85,7 +84,7 @@ async fn generic(sendMessage: SendMessage, resume: bool, test_message: &str, exp
         .expect("Error creating client");
     println!("Have discord client");
 
-    if matches!(sendMessage, SendMessage::BeforeStarted2) {
+    if matches!(when_to_send_message, WhenSendMessage::BeforeStarted2) {
         send_message(&http, channel, &test_message).await;
     }
 
@@ -93,30 +92,29 @@ async fn generic(sendMessage: SendMessage, resume: bool, test_message: &str, exp
     println!("Start done");
     let http = Arc::clone(&discord_client.cache_and_http.http);
     
-    if matches!(sendMessage, SendMessage::StartedStillRunning) {
+    if matches!(when_to_send_message, WhenSendMessage::StartedStillRunning) {
         send_message(&http, channel, &test_message).await;
     }
+
+    // Stop the client.
+    discord_client.shard_manager.lock().await.shutdown_all().await;
 
     //let state = ???;
     let mut session_id = None;
     loop {
         match session_id_recv.try_recv() {
             Ok(x) => session_id = x,
-            Err(e) => break,
+            Err(_) => break,
         }
     };
 
-    // Stop the client.
-    discord_client.shard_manager.lock().await.shutdown_all().await;
-
-    if matches!(sendMessage, SendMessage::StartedThenStopped) {
+    if matches!(when_to_send_message, WhenSendMessage::StartedThenStopped) {
         send_message(&http, channel, &test_message).await;
     }
 
     if resume {
-        // TODO: James to tell me
         let mut discord_client_builder = ClientBuilder::new_with_http(new_http(), intents)
-            .event_handler(handler);
+            .event_handler(MyHandler { messages: messages.clone() });
 
         discord_client_builder.set_session_id(session_id);
 
@@ -128,7 +126,7 @@ async fn generic(sendMessage: SendMessage, resume: bool, test_message: &str, exp
         println!("Have discord resumed client");
         
 
-        if matches!(sendMessage, SendMessage::StartedThenStoppedThenRestartedAfter) {
+        if matches!(when_to_send_message, WhenSendMessage::StartedThenStoppedThenRestartedAfter) {
             send_message(&http, channel, &test_message).await;
         }
         else {
@@ -152,8 +150,8 @@ async fn send_message(http: &Http, channel: ChannelId, message_text: &str) {
 
 #[async_trait]
 impl EventHandler for MyHandler {
-    async fn message(&self, _ctx: Context, _new_message: Message) {
-
+    async fn message(&self, _ctx: Context, new_message: Message) {
+        self.messages.lock().expect("Poisoned lock").push(new_message.clone());
     }
 
 }
