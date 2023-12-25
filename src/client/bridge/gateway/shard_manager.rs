@@ -8,7 +8,7 @@ use tokio::time::timeout;
 use tracing::{info, instrument, warn};
 use typemap_rev::TypeMap;
 use std::sync::atomic::AtomicU64;
-use std::sync::mpsc as mypc;
+use std::sync::Mutex as NMutex;
 
 use super::{
     ShardId,
@@ -126,8 +126,6 @@ impl ShardManager {
         let runners = Arc::new(Mutex::new(HashMap::new()));
         let (shutdown_send, shutdown_recv) = mpsc::unbounded();
 
-        let session_id_sender = opt.session_id_sender.clone();
-
         let shard_queuer = ShardQueuer {
             data: Arc::clone(opt.data),
             event_handler: opt.event_handler.as_ref().map(Arc::clone),
@@ -144,8 +142,7 @@ impl ShardManager {
             ws_url: Arc::clone(opt.ws_url),
             cache_and_http: Arc::clone(opt.cache_and_http),
             intents: opt.intents,
-            session_id: opt.session_id.clone(),
-            session_id_sender: session_id_sender,
+            session_id: Arc::clone(&opt.session_id),
             seq_num: Arc::clone(&opt.seq_num),
         };
 
@@ -368,7 +365,6 @@ pub struct ShardManagerOptions<'a> {
     pub ws_url: &'a Arc<Mutex<String>>,
     pub cache_and_http: &'a Arc<CacheAndHttp>,
     pub intents: GatewayIntents,
-    pub session_id: Option<String>,
-    pub session_id_sender: Option<mypc::Sender<Option<String>>>,
+    pub session_id: Arc<NMutex<Option<String>>>,
     pub seq_num: Arc<AtomicU64>,
 }
