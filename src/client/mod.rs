@@ -142,11 +142,17 @@ impl ClientBuilder {
 
     /// Set a session id to resume immediately with, and register a receiver for session_id updates.
     /// Will only work correctly with 1 shard.
-    pub fn set_session_id(&mut self, session_id: String) -> Receiver<Option<String>> {
-        self.session_id = Some(session_id);
+    pub fn set_session_id(&mut self, session_id: Option<String>) -> Receiver<Option<String>> {
+        self.session_id = session_id;
         let (tx, rx) = mpsc::channel();
         self.session_id_sender = Some(tx);
         rx
+    }
+
+    pub fn seq_num(mut self, seq_num: u64) -> Self {
+        self.seq_num = Arc::new(AtomicU64::new(seq_num));
+
+        self
     }
 
     /// Gets the thread safe access to the seq number of the single shard.

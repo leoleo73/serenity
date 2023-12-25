@@ -3,6 +3,7 @@ use std::{sync::{Arc, Mutex}, env, time::Duration};
 use serenity::{prelude::{GatewayIntents, EventHandler, Context}, http::{HttpBuilder, Http}, client::ClientBuilder, model::prelude::{Message, ChannelId}, async_trait};
 
 use rand::prelude::*;
+use std::sync::atomic::Ordering;
 
 
 #[tokio::test]
@@ -52,13 +53,18 @@ async fn generic(sendMessage: SendMessage, resume: bool, test_message: &str, exp
 
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT | GatewayIntents::GUILD_MEMBERS;
 
-    let reqwest_client = reqwest::Client::builder()
-        .build()
-        .unwrap();
+    let new_http = || {
+        let reqwest_client = reqwest::Client::builder()
+            .build()
+            .unwrap();
 
-    let http = HttpBuilder::new(&token)
-        .client(reqwest_client)
-        .build();
+        HttpBuilder::new(&token)
+            .client(reqwest_client)
+            .build()
+    };
+
+    let http = new_http();
+
     println!("Connect done");
 
     if matches!(sendMessage, SendMessage::BeforeStarted) {
@@ -68,8 +74,13 @@ async fn generic(sendMessage: SendMessage, resume: bool, test_message: &str, exp
     let messages = Arc::new(Mutex::new(Vec::new()));
     let handler = MyHandler { messages: messages.clone() };
 
-    let mut discord_client = ClientBuilder::new_with_http(http, intents)
-        .event_handler(handler)
+    let mut discord_client_builder = ClientBuilder::new_with_http(new_http(), intents)
+            .event_handler(handler);
+
+    let session_id_recv = discord_client_builder.set_session_id(None);
+    let seq_num = discord_client_builder.get_seq_num();
+
+    let mut discord_client = discord_client_builder
         .await
         .expect("Error creating client");
     println!("Have discord client");
@@ -80,16 +91,23 @@ async fn generic(sendMessage: SendMessage, resume: bool, test_message: &str, exp
 
     discord_client.start().await.expect("Failed to start discord listener");
     println!("Start done");
-    let http = discord_client.cache_and_http.http;
+    let http = Arc::clone(&discord_client.cache_and_http.http);
     
     if matches!(sendMessage, SendMessage::StartedStillRunning) {
         send_message(&http, channel, &test_message).await;
     }
 
     //let state = ???;
-    let session_id = discord_client.get_session_id();
+    let mut session_id = None;
+    loop {
+        match session_id_recv.try_recv() {
+            Ok(x) => session_id = x,
+            Err(e) => break,
+        }
+    };
 
-    discord_client.stop();
+    // Stop the client.
+    discord_client.shard_manager.lock().await.shutdown_all().await;
 
     if matches!(sendMessage, SendMessage::StartedThenStopped) {
         send_message(&http, channel, &test_message).await;
@@ -97,10 +115,16 @@ async fn generic(sendMessage: SendMessage, resume: bool, test_message: &str, exp
 
     if resume {
         // TODO: James to tell me
-        let mut discord_client = ClientBuilder::new_with_http(&http, intents)
-            .event_handler(handler)
+        let mut discord_client_builder = ClientBuilder::new_with_http(new_http(), intents)
+            .event_handler(handler);
+
+        discord_client_builder.set_session_id(session_id);
+
+        discord_client_builder
+            .seq_num(seq_num.load(Ordering::Acquire))
             .await
             .expect("Error resuming client");
+
         println!("Have discord resumed client");
         
 
