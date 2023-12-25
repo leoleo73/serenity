@@ -119,7 +119,7 @@ impl ShardRunner {
     /// 6. Go back to 1.
     ///
     /// [`ShardManager`]: super::ShardManager
-    #[instrument(skip(self))]
+    //#[instrument(skip(self))]
     pub async fn run(&mut self) -> Result<()> {
         info!("[ShardRunner {:?}] Running", self.shard.shard_info());
 
@@ -143,13 +143,14 @@ impl ShardRunner {
             if post != pre {
                 self.update_manager();
 
+                let shard_id = ShardId(self.shard.shard_info()[0]);
                 let e = ClientEvent::ShardStageUpdate(ShardStageUpdateEvent {
                     new: post,
                     old: pre,
-                    shard_id: ShardId(self.shard.shard_info()[0]),
+                    shard_id: shard_id,
                 });
-
-                self.dispatch(DispatchEvent::Client(e)).await;
+                let future = self.dispatch(DispatchEvent::Client(e));
+                future.await;
             }
 
             match action {
@@ -164,7 +165,8 @@ impl ShardRunner {
                             other,
                             e
                         );
-                        match self.shard.reconnection_type() {
+                        let reconnection_type = self.shard.reconnection_type();
+                        match reconnection_type {
                             ReconnectType::Reidentify => return self.request_restart().await,
                             ReconnectType::Resume => {
                                 if let Err(why) = self.shard.resume().await {

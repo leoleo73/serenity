@@ -34,8 +34,8 @@ use futures::future::BoxFuture;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, instrument, warn};
 use typemap_rev::{TypeMap, TypeMapKey};
-use std::sync::mpsc::{self, Sender, Receiver};
 use std::sync::atomic::AtomicU64;
+use std::sync::Mutex as NMutex;
 
 #[cfg(feature = "gateway")]
 use self::bridge::gateway::{
@@ -83,8 +83,7 @@ pub struct ClientBuilder {
     voice_manager: Option<Arc<dyn VoiceGatewayManager + Send + Sync + 'static>>,
     event_handler: Option<Arc<dyn EventHandler>>,
     raw_event_handler: Option<Arc<dyn RawEventHandler>>,
-    session_id: Option<String>,
-    session_id_sender: Option<Sender<Option<String>>>,
+    session_id: Arc<NMutex<Option<String>>>,
     seq_num: Arc<AtomicU64>,
 }
 
@@ -104,8 +103,7 @@ impl ClientBuilder {
             voice_manager: None,
             event_handler: None,
             raw_event_handler: None,
-            session_id: None,
-            session_id_sender: None,
+            session_id: Arc::new(NMutex::new(None)),
             seq_num: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -142,11 +140,10 @@ impl ClientBuilder {
 
     /// Set a session id to resume immediately with, and register a receiver for session_id updates.
     /// Will only work correctly with 1 shard.
-    pub fn set_session_id(&mut self, session_id: Option<String>) -> Receiver<Option<String>> {
+    pub fn set_session_id(mut self, session_id: Arc<NMutex<Option<String>>>) -> Self {
         self.session_id = session_id;
-        let (tx, rx) = mpsc::channel();
-        self.session_id_sender = Some(tx);
-        rx
+
+        self
     }
 
     pub fn seq_num(mut self, seq_num: u64) -> Self {
@@ -410,8 +407,7 @@ impl Future for ClientBuilder {
                 http: Arc::clone(&http),
             });
 
-            let session_id = self.session_id.clone();
-            let session_id_sender = self.session_id_sender.clone();
+            let session_id = Arc::clone(&self.session_id);
             let seq_num = Arc::clone(&self.seq_num);
 
             self.fut = Some(Box::pin(async move {
@@ -439,7 +435,6 @@ impl Future for ClientBuilder {
                         cache_and_http: &cache_and_http,
                         intents,
                         session_id,
-                        session_id_sender,
                         seq_num,
                     })
                     .await
