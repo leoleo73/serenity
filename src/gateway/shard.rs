@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration as StdDuration, Instant};
+use std::sync::mpsc::Sender;
 
 use async_tungstenite::tungstenite::error::Error as TungsteniteError;
 use async_tungstenite::tungstenite::protocol::frame::CloseFrame;
@@ -77,8 +79,9 @@ pub struct Shard {
     // This _must_ be set to `true` in `Shard::handle_event`'s
     // `Ok(GatewayEvent::HeartbeatAck)` arm.
     last_heartbeat_acknowledged: bool,
-    seq: u64,
+    seq: Arc<AtomicU64>,
     session_id: Option<String>,
+    session_id_sender: Option<Sender<Option<String>>>,
     shard_info: [u64; 2],
     stage: ConnectionStage,
     /// Instant of when the shard was started.
@@ -91,6 +94,47 @@ pub struct Shard {
 }
 
 impl Shard {
+    pub async fn new_resume(
+        ws_url: Arc<Mutex<String>>,
+        token: &str,
+        shard_info: [u64; 2],
+        intents: GatewayIntents,
+        session_id: Option<String>,
+        session_id_sender: Option<Sender<Option<String>>>,
+        seq: Arc<AtomicU64>,
+    ) -> Result<Shard> {
+        let url = ws_url.lock().await.clone();
+        let client = connect(&url).await?;
+
+        let current_presence = (None, OnlineStatus::Online);
+        let heartbeat_instants = (None, None);
+        let heartbeat_interval = None;
+        let last_heartbeat_acknowledged = true;
+        let stage = if session_id.is_some() {
+            ConnectionStage::Resuming
+        } else {
+            ConnectionStage::Handshake
+        };
+
+        Ok(Shard {
+            client,
+            current_presence,
+            heartbeat_instants,
+            heartbeat_interval,
+            http: None,
+            last_heartbeat_acknowledged,
+            seq,
+            stage,
+            started: Instant::now(),
+            token: token.to_string(),
+            session_id,
+            session_id_sender,
+            shard_info,
+            ws_url,
+            intents,
+        })
+    }
+
     /// Instantiates a new instance of a Shard, bypassing the client.
     ///
     /// **Note**: You should likely never need to do this yourself.
@@ -126,7 +170,7 @@ impl Shard {
     ///
     /// On Error, will return either [`Error::Gateway`], [`Error::Tungstenite`]
     /// or a Rustls/native TLS error.
-    pub async fn new(
+    /*pub async fn new(
         ws_url: Arc<Mutex<String>>,
         token: &str,
         shard_info: [u64; 2],
@@ -139,9 +183,9 @@ impl Shard {
         let heartbeat_instants = (None, None);
         let heartbeat_interval = None;
         let last_heartbeat_acknowledged = true;
-        let seq = 0;
         let stage = ConnectionStage::Handshake;
         let session_id = None;
+        let seq = Arc::new(AtomicU64::new(0));
 
         Ok(Shard {
             client,
@@ -159,7 +203,7 @@ impl Shard {
             ws_url,
             intents,
         })
-    }
+    }*/
 
     /// Sets the associated [`Http`] client.
     ///
@@ -206,7 +250,7 @@ impl Shard {
     /// a heartbeat.
     #[instrument(skip(self))]
     pub async fn heartbeat(&mut self) -> Result<()> {
-        match self.client.send_heartbeat(&self.shard_info, Some(self.seq)).await {
+        match self.client.send_heartbeat(&self.shard_info, Some(self.seq())).await {
             Ok(()) => {
                 self.heartbeat_instants.0 = Some(Instant::now());
                 self.last_heartbeat_acknowledged = false;
@@ -242,7 +286,7 @@ impl Shard {
 
     #[inline]
     pub fn seq(&self) -> u64 {
-        self.seq
+        self.seq.load(Ordering::Relaxed)
     }
 
     #[inline]
@@ -320,8 +364,10 @@ impl Shard {
 
     #[instrument(skip(self))]
     fn handle_gateway_dispatch(&mut self, seq: u64, event: &Event) -> Option<ShardAction> {
-        if seq > self.seq + 1 {
-            warn!("[Shard {:?}] Sequence off; them: {}, us: {}", self.shard_info, seq, self.seq);
+        let our_seq = self.seq.fetch_add(1, Ordering::Relaxed);
+        if seq > our_seq + 1 {
+            warn!("[Shard {:?}] Sequence off; them: {}, expected: {}", self.shard_info, seq, our_seq);
+            self.seq.store(seq, Ordering::Release);
         }
 
         match event {
@@ -329,6 +375,7 @@ impl Shard {
                 debug!("[Shard {:?}] Received Ready", self.shard_info);
 
                 self.session_id = Some(ready.ready.session_id.clone());
+                self.send_new_session_id();
                 self.stage = ConnectionStage::Connected;
 
                 if let Some(ref http) = self.http {
@@ -345,8 +392,6 @@ impl Shard {
             _ => {},
         }
 
-        self.seq = seq;
-
         None
     }
 
@@ -355,10 +400,11 @@ impl Shard {
         info!("[Shard {:?}] Received shard heartbeat", self.shard_info);
 
         // Received seq is off -- attempt to resume.
-        if s > self.seq + 1 {
+        let our_seq = self.seq();
+        if s > our_seq + 1 {
             info!(
                 "[Shard {:?}] Received off sequence (them: {}; us: {}); resuming",
-                self.shard_info, s, self.seq
+                self.shard_info, s, our_seq
             );
 
             if self.stage == ConnectionStage::Handshake {
@@ -409,9 +455,9 @@ impl Shard {
                 warn!("[Shard {:?}] Already authenticated.", self.shard_info);
             },
             Some(close_codes::INVALID_SEQUENCE) => {
-                warn!("[Shard {:?}] Sent invalid seq: {}.", self.shard_info, self.seq);
+                warn!("[Shard {:?}] Sent invalid seq: {}.", self.shard_info, self.seq());
 
-                self.seq = 0;
+                self.seq.store(0, Ordering::Release);
             },
             Some(close_codes::RATE_LIMITED) => {
                 warn!("[Shard {:?}] Gateway ratelimited.", self.shard_info);
@@ -430,6 +476,7 @@ impl Shard {
                 info!("[Shard {:?}] Invalid session.", self.shard_info);
 
                 self.session_id = None;
+                self.send_new_session_id()
             },
             Some(close_codes::INVALID_GATEWAY_INTENTS) => {
                 error!("[Shard {:?}] Invalid gateway intents have been provided.", self.shard_info);
@@ -770,8 +817,9 @@ impl Shard {
         self.heartbeat_interval = None;
         self.last_heartbeat_acknowledged = true;
         self.session_id = None;
+        self.send_new_session_id();
         self.stage = ConnectionStage::Disconnected;
-        self.seq = 0;
+        self.seq.store(0, Ordering::Release); // I think this may need to be release.
     }
 
     #[instrument(skip(self))]
@@ -783,7 +831,7 @@ impl Shard {
 
         match self.session_id.as_ref() {
             Some(session_id) => {
-                self.client.send_resume(&self.shard_info, session_id, self.seq, &self.token).await
+                self.client.send_resume(&self.shard_info, session_id, self.seq(), &self.token).await
             },
             None => Err(Error::Gateway(GatewayError::NoSessionId)),
         }
@@ -802,6 +850,12 @@ impl Shard {
     #[instrument(skip(self))]
     pub async fn update_presence(&mut self) -> Result<()> {
         self.client.send_presence_update(&self.shard_info, &self.current_presence).await
+    }
+
+    fn send_new_session_id(&self) {
+        if let Some(sender) = &self.session_id_sender {
+            sender.send(self.session_id.clone());
+        }
     }
 }
 

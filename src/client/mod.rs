@@ -32,8 +32,10 @@ use std::task::{Context as FutContext, Poll};
 
 use futures::future::BoxFuture;
 use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 use typemap_rev::{TypeMap, TypeMapKey};
+use std::sync::mpsc::{self, Sender, Receiver};
+use std::sync::atomic::AtomicU64;
 
 #[cfg(feature = "gateway")]
 use self::bridge::gateway::{
@@ -81,6 +83,9 @@ pub struct ClientBuilder {
     voice_manager: Option<Arc<dyn VoiceGatewayManager + Send + Sync + 'static>>,
     event_handler: Option<Arc<dyn EventHandler>>,
     raw_event_handler: Option<Arc<dyn RawEventHandler>>,
+    session_id: Option<String>,
+    session_id_sender: Option<Sender<Option<String>>>,
+    seq_num: Arc<AtomicU64>,
 }
 
 #[cfg(feature = "gateway")]
@@ -99,6 +104,9 @@ impl ClientBuilder {
             voice_manager: None,
             event_handler: None,
             raw_event_handler: None,
+            session_id: None,
+            session_id_sender: None,
+            seq_num: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -130,6 +138,20 @@ impl ClientBuilder {
         self.http = Some(Http::new(token.as_ref()));
 
         self
+    }
+
+    /// Set a session id to resume immediately with, and register a receiver for session_id updates.
+    /// Will only work correctly with 1 shard.
+    pub fn set_session_id(&mut self, session_id: String) -> Receiver<Option<String>> {
+        self.session_id = Some(session_id);
+        let (tx, rx) = mpsc::channel();
+        self.session_id_sender = Some(tx);
+        rx
+    }
+
+    /// Gets the thread safe access to the seq number of the single shard.
+    pub fn get_seq_num(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.seq_num)
     }
 
     /// Gets the current token used for the [`Http`] client.
@@ -382,6 +404,10 @@ impl Future for ClientBuilder {
                 http: Arc::clone(&http),
             });
 
+            let session_id = self.session_id.clone();
+            let session_id_sender = self.session_id_sender.clone();
+            let seq_num = Arc::clone(&self.seq_num);
+
             self.fut = Some(Box::pin(async move {
                 let ws_url = Arc::new(Mutex::new(match http.get_gateway().await {
                     Ok(response) => response.url,
@@ -406,6 +432,9 @@ impl Future for ClientBuilder {
                         ws_url: &ws_url,
                         cache_and_http: &cache_and_http,
                         intents,
+                        session_id,
+                        session_id_sender,
+                        seq_num,
                     })
                     .await
                 };
@@ -418,6 +447,9 @@ impl Future for ClientBuilder {
                     voice_manager,
                     ws_url,
                     cache_and_http,
+                    /*session_id: self.session_id,
+                    session_id_sender: self.session_id_sender,
+                    seq_num: self.seq_num,*/
                 })
             }));
         }
@@ -664,6 +696,9 @@ pub struct Client {
     pub ws_url: Arc<Mutex<String>>,
     /// A container for an optional cache and HTTP client.
     pub cache_and_http: Arc<CacheAndHttp>,
+    /*session_id: Option<String>,
+    session_id_recv: Receiver<Option<String>>,
+    seq_num: Arc<AtomicU64>,*/
 }
 
 impl Client {
@@ -950,6 +985,10 @@ impl Client {
     /// an error.
     #[instrument(skip(self))]
     async fn start_connection(&mut self, shard_data: [u64; 3]) -> Result<()> {
+        if shard_data[2] != 1 {
+            warn!("This version of serenity has modifications unsuitable for multiple shards!");
+        }
+
         #[cfg(feature = "voice")]
         if let Some(voice_manager) = &self.voice_manager {
             let user = self.cache_and_http.http.get_current_user().await?;

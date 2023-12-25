@@ -7,6 +7,8 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tracing::{debug, info, instrument, warn};
 use typemap_rev::TypeMap;
+use std::sync::atomic::AtomicU64;
+use std::sync::mpsc;
 
 use super::{
     ShardClientMessage,
@@ -80,6 +82,10 @@ pub struct ShardQueuer {
     pub ws_url: Arc<Mutex<String>>,
     pub cache_and_http: Arc<CacheAndHttp>,
     pub intents: GatewayIntents,
+
+    pub session_id: Option<String>,
+    pub session_id_sender: Option<mpsc::Sender<Option<String>>>,
+    pub seq_num: Arc<AtomicU64>,
 }
 
 impl ShardQueuer {
@@ -169,17 +175,28 @@ impl ShardQueuer {
         self.last_start = Some(Instant::now());
     }
 
-    #[instrument(skip(self))]
+    //#[instrument(skip(self))]
     async fn start(&mut self, shard_id: u64, shard_total: u64) -> Result<()> {
         let shard_info = [shard_id, shard_total];
 
-        let mut shard = Shard::new(
+        /*let mut shard = Shard::new(
             Arc::clone(&self.ws_url),
             &self.cache_and_http.http.token,
             shard_info,
             self.intents,
         )
-        .await?;
+        .await?;*/
+        let session_id_sender = self.session_id_sender.clone();
+
+        let mut shard = Shard::new_resume(
+            Arc::clone(&self.ws_url),
+            &self.cache_and_http.http.token,
+            shard_info,
+            self.intents,
+            self.session_id.clone(),
+            session_id_sender,
+            Arc::clone(&self.seq_num),
+        ).await?;
 
         shard.set_http(Arc::clone(&self.cache_and_http.http));
 
@@ -202,10 +219,10 @@ impl ShardQueuer {
             stage: ConnectionStage::Disconnected,
         };
 
-        spawn_named("shard_queuer::stop", async move {
+        /*spawn_named("shard_queuer::stop", async move {
             drop(runner.run().await);
             debug!("[ShardRunner {:?}] Stopping", runner.shard.shard_info());
-        });
+        });*/
 
         self.runners.lock().await.insert(ShardId(shard_id), runner_info);
 
