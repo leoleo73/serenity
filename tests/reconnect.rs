@@ -3,11 +3,14 @@ use std::{sync::{Arc, Mutex}, env, time::Duration};
 use serenity::{prelude::{GatewayIntents, EventHandler, Context}, http::{HttpBuilder, Http}, client::ClientBuilder, model::prelude::{Message, ChannelId}, async_trait};
 
 use rand::prelude::*;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::AtomicU64;
+use tracing_subscriber;
 
 
 #[tokio::test]
 async fn works_normally() {
+    //tracing_subscriber::fmt::init();
+
     let test_message = format!("Test {}", random::<u32>());
     generic(WhenSendMessage::BeforeStarted, false, &test_message, vec![]).await;
 
@@ -23,6 +26,8 @@ async fn works_normally() {
 
 #[tokio::test]
 async fn resume_works() {
+    //tracing_subscriber::fmt::init();
+
     let test_message = format!("Test {}", random::<u32>());
     generic(WhenSendMessage::StartedThenStopped, true, &test_message.clone(), vec![test_message]).await;
 
@@ -72,58 +77,57 @@ async fn generic(when_to_send_message: WhenSendMessage, resume: bool, test_messa
     }
 
     let messages = Arc::new(Mutex::new(Vec::new()));
+    let session_id = Arc::new(Mutex::new(None));
+    let seq_num = Arc::new(AtomicU64::new(0));
 
-    let mut discord_client_builder = ClientBuilder::new_with_http(new_http(), intents)
-            .event_handler(MyHandler { messages: messages.clone() });
-
-    let session_id_recv = discord_client_builder.set_session_id(None);
-    let seq_num = discord_client_builder.get_seq_num();
-
-    let mut discord_client = discord_client_builder
+    let mut discord_client = ClientBuilder::new_with_http(new_http(), intents)
+        .event_handler(MyHandler { messages: messages.clone() })
+        .session_id(Arc::clone(&session_id))
+        .seq_num(Arc::clone(&seq_num))
         .await
         .expect("Error creating client");
+
     println!("Have discord client");
+    let http = Arc::new(new_http());
 
     if matches!(when_to_send_message, WhenSendMessage::BeforeStarted2) {
         send_message(&http, channel, &test_message).await;
     }
 
-    discord_client.start().await.expect("Failed to start discord listener");
+    println!("About to start discord client");
+
+    let shard_manager = Arc::clone(&discord_client.shard_manager);
+    tokio::spawn(async move {
+        discord_client.start().await.expect("Failed to start discord listener");
+    });
     println!("Start done");
-    let http = Arc::clone(&discord_client.cache_and_http.http);
     
     if matches!(when_to_send_message, WhenSendMessage::StartedStillRunning) {
         send_message(&http, channel, &test_message).await;
     }
 
     // Stop the client.
-    discord_client.shard_manager.lock().await.shutdown_all().await;
+    shard_manager.lock().await.shutdown_all().await;
 
     //let state = ???;
-    let mut session_id = None;
-    loop {
-        match session_id_recv.try_recv() {
-            Ok(x) => session_id = x,
-            Err(_) => break,
-        }
-    };
 
     if matches!(when_to_send_message, WhenSendMessage::StartedThenStopped) {
         send_message(&http, channel, &test_message).await;
     }
 
     if resume {
-        let mut discord_client_builder = ClientBuilder::new_with_http(new_http(), intents)
-            .event_handler(MyHandler { messages: messages.clone() });
-
-        discord_client_builder.set_session_id(session_id);
-
-        discord_client_builder
-            .seq_num(seq_num.load(Ordering::Acquire))
+        let mut discord_client = ClientBuilder::new_with_http(new_http(), intents)
+            .event_handler(MyHandler { messages: messages.clone() })
+            .session_id(session_id)
+            .seq_num(seq_num)
             .await
             .expect("Error resuming client");
 
-        println!("Have discord resumed client");
+        let shard_manager = Arc::clone(&discord_client.shard_manager);
+        tokio::spawn(async move {
+            discord_client.start().await.expect("Failed to start discord listener");
+        });
+        println!("Have resumed discord client");
         
 
         if matches!(when_to_send_message, WhenSendMessage::StartedThenStoppedThenRestartedAfter) {
@@ -132,6 +136,9 @@ async fn generic(when_to_send_message: WhenSendMessage, resume: bool, test_messa
         else {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+
+        // Stop the client.
+        shard_manager.lock().await.shutdown_all().await;
     }
 
     assert_eq!(messages.lock().unwrap().iter().map(|x| x.content.clone()).collect::<Vec<_>>(), expected);

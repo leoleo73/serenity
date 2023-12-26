@@ -143,14 +143,13 @@ impl ShardRunner {
             if post != pre {
                 self.update_manager();
 
-                let shard_id = ShardId(self.shard.shard_info()[0]);
                 let e = ClientEvent::ShardStageUpdate(ShardStageUpdateEvent {
                     new: post,
                     old: pre,
-                    shard_id: shard_id,
+                    shard_id: ShardId(self.shard.shard_info()[0]),
                 });
-                let future = self.dispatch(DispatchEvent::Client(e));
-                future.await;
+
+                self.dispatch(DispatchEvent::Client(e)).await;
             }
 
             match action {

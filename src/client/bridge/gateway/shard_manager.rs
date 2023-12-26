@@ -126,7 +126,7 @@ impl ShardManager {
         let runners = Arc::new(Mutex::new(HashMap::new()));
         let (shutdown_send, shutdown_recv) = mpsc::unbounded();
 
-        let shard_queuer = ShardQueuer {
+        let mut shard_queuer = ShardQueuer {
             data: Arc::clone(opt.data),
             event_handler: opt.event_handler.as_ref().map(Arc::clone),
             raw_event_handler: opt.raw_event_handler.as_ref().map(Arc::clone),
@@ -146,8 +146,9 @@ impl ShardManager {
             seq_num: Arc::clone(&opt.seq_num),
         };
 
-        let future = Self::shard_queuer_run(shard_queuer);
-        spawn_named("shard_queuer::run", future);
+        spawn_named("shard_queuer::run", async move {
+            shard_queuer.run().await
+        });
 
         let manager = Arc::new(Mutex::new(Self {
             monitor_tx: thread_tx,
@@ -164,10 +165,6 @@ impl ShardManager {
             manager,
             shutdown: shutdown_send,
         })
-    }
-
-    async fn shard_queuer_run(mut shard_queuer: ShardQueuer) {
-        shard_queuer.run().await;
     }
 
     /// Returns whether the shard manager contains either an active instance of

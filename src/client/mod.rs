@@ -140,14 +140,14 @@ impl ClientBuilder {
 
     /// Set a session id to resume immediately with, and register a receiver for session_id updates.
     /// Will only work correctly with 1 shard.
-    pub fn set_session_id(mut self, session_id: Arc<NMutex<Option<String>>>) -> Self {
+    pub fn session_id(mut self, session_id: Arc<NMutex<Option<String>>>) -> Self {
         self.session_id = session_id;
 
         self
     }
 
-    pub fn seq_num(mut self, seq_num: u64) -> Self {
-        self.seq_num = Arc::new(AtomicU64::new(seq_num));
+    pub fn seq_num(mut self, seq_num: Arc<AtomicU64>) -> Self {
+        self.seq_num = seq_num;
 
         self
     }
