@@ -83,6 +83,11 @@ impl<'a> CreateMessage<'a> {
         self
     }
 
+    pub fn clear_embeds(&mut self) -> &mut Self {
+        self.0.insert("embeds", Value::from(Vec::<Value>::new()));
+    }
+
+
     /// Add an embed for the message.
     ///
     /// **Note**: This will keep all existing embeds. Use [`Self::set_embed()`] to replace existing
