@@ -85,6 +85,8 @@ impl<'a> CreateMessage<'a> {
 
     pub fn clear_embeds(&mut self) -> &mut Self {
         self.0.insert("embeds", Value::from(Vec::<Value>::new()));
+
+        self
     }
 
 
