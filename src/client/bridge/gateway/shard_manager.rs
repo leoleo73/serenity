@@ -318,7 +318,8 @@ impl ShardManager {
         info!("Shutting down all shards");
 
         for shard_id in keys {
-            self.shutdown(shard_id, 1000).await;
+            // Allow resuming.
+            self.shutdown(shard_id, 4000).await;
         }
 
         drop(self.shard_queuer.unbounded_send(ShardQueuerMessage::Shutdown));

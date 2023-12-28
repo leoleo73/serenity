@@ -367,7 +367,6 @@ impl Shard {
     #[instrument(skip(self))]
     fn handle_gateway_dispatch(&mut self, seq: u64, event: &Event) -> Option<ShardAction> {
         let our_seq = self.seq.fetch_add(1, Ordering::AcqRel);
-        println!("Our seq: {}. Their seq: {}", our_seq, seq);
         if seq > our_seq + 1 {
             warn!("[Shard {:?}] Sequence off; them: {}, expected: {}", self.shard_info, seq, our_seq);
             self.seq.store(seq, Ordering::Release);

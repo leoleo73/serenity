@@ -4,14 +4,11 @@ use serenity::{prelude::{GatewayIntents, EventHandler, Context}, http::{HttpBuil
 
 use rand::prelude::*;
 use std::sync::atomic::AtomicU64;
-use tracing_subscriber;
 
 const MINI_WAIT: u64 = 1;
 
 #[tokio::test]
 async fn works_normally() {
-    tracing_subscriber::fmt::init();
-
     let test_message = format!("Test #1: {}", random::<u32>());
     generic(WhenSendMessage::BeforeStarted, false, &test_message, vec![]).await;
 
@@ -27,8 +24,6 @@ async fn works_normally() {
 
 #[tokio::test]
 async fn resume_works() {
-    tracing_subscriber::fmt::init();
-
     let test_message = format!("Test #1: {}", random::<u32>());
     generic(WhenSendMessage::StartedThenStopped, true, &test_message.clone(), vec![test_message]).await;
 
